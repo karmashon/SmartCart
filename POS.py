@@ -6,6 +6,7 @@ from kivy.uix.button import Button
 from kivy.uix.scrollview import ScrollView
 from kivy.uix.gridlayout import GridLayout
 from kivy.core.window import Window
+import sqlite3
 
 Window.clearcolor = (1,1,1,1)
 
@@ -13,9 +14,39 @@ kivy.require('2.1.0')  # Replace with your Kivy version
 
 class POSApp(App):
     def build(self):
+        # Initialize database & query cursor
+        connection = sqlite3.connect("marketDB.db")
+        self.cursor = connection.cursor()
 
-        self.item_codes = {"12345" : "Item 1", "23456" : "Item 2", "34567" : "Item 3", "45678" : "Item 4",
+        # Drop table only if changes need to be made
+        #self.cursor.execute("Drop table if exists Items")
+        
+        self.cursor.execute(
+            "Create table if not exists Items(itemID integer primary key, itemName text, itemPrice real, itemCode text)"
+            )
+
+        # Hardcoded item arrays
+        item_codes = {"12345" : "Item 1", "23456" : "Item 2", "34567" : "Item 3", "45678" : "Item 4",
                            "56789" : "Item 5", "67890" : "Item 6", "78901" : "Item 7"}
+        prices = {'Item 1' : 10.0, 'Item 2' : 20.0, 'Item 3' : 30.0, 'Item 4' : 40.0, 'Item 5' : 50.0, 
+                       'Item 6' : 60.0, 'Item 7' : 70.0}
+        barcodes = {'Item 1' : "12345678901234", 'Item 2' : "23456789012345", 'Item 3' : "34567890123456", 'Item 4' : 
+                    "45678901234567", 'Item 5' : "56789012345678", 'Item 6' : "67890123456789", 'Item 7' : "78901234567890"}
+        
+        # Save items into database if it is a new item
+        for id in item_codes:
+            existCount = self.cursor.execute("Select Count(*) from Items where itemID = "+id)
+            if existCount.fetchone()[0]==0:
+                self.cursor.execute(
+                    "Insert into Items values("+id+",\'"+str(item_codes[id])+"\',"+str(prices[item_codes[id]])+",\'"+barcodes[item_codes[id]]+"\')"
+                )
+        
+        # Display records for verifying table creation and insertion
+        tableRecords = self.cursor.execute("Select * from Items").fetchall()
+        for record in tableRecords:
+            print(record)
+
+        
         self.barcode_buffer = ""  # Variable to store the barcode input
         self.keyboard = Window.request_keyboard(self._keyboard_closed, self)
         self.keyboard.bind(on_key_down=self._on_keyboard_down)
@@ -30,10 +61,9 @@ class POSApp(App):
         left_grid.bind(minimum_height=left_grid.setter('height'))
 
         # Add some items to the left side
-        self.prices = {'Item 1' : 10.0, 'Item 2' : 20.0, 'Item 3' : 30.0, 'Item 4' : 40.0, 'Item 5' : 50.0, 
-                       'Item 6' : 60.0, 'Item 7' : 70.0}
-        for item in self.prices:
-            btn = Button(text=item+", MRP : "+str(self.prices[item]), size_hint_y=None, height=40)
+        
+        for item in tableRecords:
+            btn = Button(text=item[1]+", MRP : "+str(item[2]), size_hint_y=None, height=40)
             btn.bind(on_release=self.add_to_cart)
             left_grid.add_widget(btn)
 
@@ -65,7 +95,7 @@ class POSApp(App):
 
     def add_to_cart(self, instance):
         item_name = instance.text.split(',')[0]
-        item_price = self.prices[item_name]
+        item_price = self.cursor.execute("Select itemPrice from Items where itemName = \'"+item_name+"\'").fetchone()[0]
 
         # Check if the item is already in the cart
         if item_name in self.cart_items:
@@ -101,7 +131,8 @@ class POSApp(App):
         item_info = self.cart_items[item_name]
         item_info['quantity'] += 1
         item_info['quantity_label'].text = str(item_info['quantity'])
-        self.update_total(self.prices[item_name])
+        addedItemCost = self.cursor.execute("Select itemPrice from Items where itemName = \'"+item_name+"\'").fetchone()[0]
+        self.update_total(addedItemCost)
 
     def decrement_quantity(self, item_name):
         item_info = self.cart_items[item_name]
@@ -112,7 +143,8 @@ class POSApp(App):
             # Remove item from the cart if quantity reaches 0
             self.right_grid.remove_widget(item_info['quantity_label'].parent)
             del self.cart_items[item_name]
-        self.update_total(-self.prices[item_name])
+        deletedItemCost = self.cursor.execute("Select itemPrice from Items where itemName = \'"+item_name+"\'").fetchone()[0]
+        self.update_total(-deletedItemCost)
     
     def update_total(self,price):
         print("Adding",price)
@@ -137,9 +169,15 @@ class POSApp(App):
             self.barcode_buffer += text
 
     def process_barcode(self,barcode):
-        if barcode in self.item_codes:
-            print("Scanned product is "+self.item_codes[barcode])
-        # Process barcode text here
+        # Search for barcode match in the database
+        barcodeMatch = self.cursor.execute("Select * from Items where itemCode = \'"+barcode+"\'").fetchall()
+        if len(barcodeMatch) > 0:    
+            barcodeMatch = barcodeMatch[0]        
+            print("Scanned product is "+barcodeMatch[1])
+
+            # Create a temporary Button instance to conveniently pass to add_to_cart, so as to not redefine the function
+            temp_button = Button(text=barcodeMatch[1]+", MRP : "+str(barcodeMatch[2]), size_hint_y=None, height=40)
+            self.add_to_cart(temp_button)
         else:
             print("Invalid Barcode")
 
